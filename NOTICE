@@ -1,0 +1,8 @@
+go-leanxmss is a Go port of the lean_xmss crate of leanVM,
+https://github.com/leanEthereum/leanVM, at commit
+f7ba4999ae523b94c8d0969b32762c3effea4cbd.
+leanVM is Copyright (c) 2026 leanEthereum, licensed under MIT OR Apache-2.0.
+
+testdata/ethlib holds the leanXMSS test vectors of EthLib,
+https://github.com/ethereum/EthLib, at commit
+a2a9e655f965dbadf33b3acfbc645696078fc75d, as vendored by leanVM.

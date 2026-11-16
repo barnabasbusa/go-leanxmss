@@ -132,19 +132,52 @@ func addTrial(base u128, c uint64) randomizer {
 	return r
 }
 
+// trialSearch is the search for the least admissible trial of one digest.
+//
+// A trial's hash input P | A | M | R is one Keccak-256 block, R at a lane
+// boundary, so the search pads it once, into a state with R zero: a trial XORs its
+// R into two lanes, and costs one permutation.
+type trialSearch struct {
+	state [25]uint64 // The padded block of P | A | M | 0, before the permutation.
+	at    int        // The lane R starts at.
+	base  u128
+}
+
+const keccakRate = 136 // Keccak-256's block, in bytes.
+
+// The trials' inputs are one block, and the randomizer starts a lane.
+var (
+	_ = [1]int{}[(publicParamLen+addressLen+messageSize+randomizerLen)/keccakRate]
+	_ = [1]int{}[(publicParamLen+addressLen+messageSize)%8]
+	_ = [1]int{}[(publicParamLen+addressLen+n)%8]
+)
+
+func newTrialSearch(pp *publicParam, layer int, e uint32, message []byte, base u128) *trialSearch {
+	var block [keccakRate]byte
+	copy(block[:], pp[:])
+	putAddress((*[addressLen]byte)(block[publicParamLen:]), newTweak(tweakMsg, layerHi(layer, 0), e))
+	at := publicParamLen + addressLen + copy(block[publicParamLen+addressLen:], message)
+	block[at+randomizerLen] = 0x01
+	block[keccakRate-1] |= 0x80
+
+	s := &trialSearch{at: at / 8, base: base}
+	for i := range keccakRate / 8 {
+		s.state[i] = binary.LittleEndian.Uint64(block[8*i:])
+	}
+
+	return s
+}
+
 // leastTrial returns the least c below maxRandomizerTrials whose randomizer
 // base + c makes key e's digest of message on layer a codeword: the least, which
 // keeps one key to one codeword. The search is spread over all CPUs, in rounds of
 // consecutive chunks; the first chunk of a round holding a codeword holds the least.
 func leastTrial(pp *publicParam, layer int, e uint32, message []byte, base u128) (uint64, bool) {
+	s := newTrialSearch(pp, layer, e, message, base)
 	workers := runtime.GOMAXPROCS(0)
-	hashers := make([]*hasher, workers)
-	for i := range hashers {
-		hashers[i] = newHasher()
-	}
-
 	found := make([]uint64, workers)
 	round := uint64(workers) * trialChunk
+
 	for start := uint64(0); start < maxRandomizerTrials; start += round {
 		var wg sync.WaitGroup
 		for i := range workers {
@@ -156,7 +189,7 @@ func leastTrial(pp *publicParam, layer int, e uint32, message []byte, base u128)
 
 			to := min(from+trialChunk, maxRandomizerTrials)
 			wg.Go(func() {
-				found[i] = hashers[i].firstTrial(pp, layer, e, message, base, from, to)
+				found[i] = s.firstTrial(from, to)
 			})
 		}
 
@@ -174,18 +207,17 @@ func leastTrial(pp *publicParam, layer int, e uint32, message []byte, base u128)
 
 // firstTrial returns the least c in [from, to) whose randomizer base + c makes the
 // digest a codeword, or notFound.
-func (k *hasher) firstTrial(pp *publicParam, layer int, e uint32, message []byte, base u128, from, to uint64) uint64 {
-	var zero randomizer
-	k.begin(pp, newTweak(tweakMsg, layerHi(layer, 0), e))
-	k.write(message)
-	k.write(zero[:])
-
-	slot := k.buf[k.len-randomizerLen : k.len]
+func (s *trialSearch) firstTrial(from, to uint64) uint64 {
+	var st [25]uint64
 	for c := from; c < to; c++ {
-		r := addTrial(base, c)
-		copy(slot, r[:])
-		out := k.sum()
-		if isCodeword(binary.LittleEndian.Uint64(out[0:8]), binary.LittleEndian.Uint64(out[8:16])) {
+		st = s.state
+		lo, carry := bits.Add64(s.base.lo, c, 0)
+		st[s.at] ^= lo
+		st[s.at+1] ^= s.base.hi + carry
+		keccakF1600(&st)
+
+		// The digest's first 16 bytes are lanes 0 and 1, little endian.
+		if isCodeword(st[0], st[1]) {
 			return c
 		}
 	}

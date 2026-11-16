@@ -96,6 +96,15 @@ leaf index. This search is nearly all the time of signing once the bottom tree i
 built. Signing in a new bottom tree also builds that tree, and runs a second
 search, to sign its root with the top tree's leaf.
 
+### One permutation per trial
+
+A trial's hash input, the public parameter, the address, the message and the
+randomizer, is a single Keccak-256 block, in which only the randomizer changes.
+The search pads that block once, into a Keccak state whose randomizer lanes are
+zero. A trial copies that state, XORs its randomizer into two lanes, runs one
+Keccak-f[1600] permutation and reads the digest from the first two lanes, with no
+hashing API, buffering or byte encoding in between.
+
 ## API
 
 ### `PrivateKey`
@@ -149,16 +158,16 @@ On an Apple M2 Max (12 cores), mean of 5 runs of `go test -run '^$' -bench . -co
 
 | Operation                              | 12 CPUs | 1 CPU   |
 | -------------------------------------- | ------- | ------- |
-| `NewKeyFromSeed` (builds the top tree) | 590 ms  | 5.26 s  |
-| `Prepare` (builds a bottom tree)       | 698 ms  | 5.45 s  |
-| `Verify`                               | 69.7 µs | 71.1 µs |
+| `NewKeyFromSeed` (builds the top tree) | 604 ms  | 5.60 s  |
+| `Prepare` (builds a bottom tree)       | 688 ms  | 5.81 s  |
+| `Verify`                               | 73.5 µs | 73.1 µs |
 
 Signing:
 
 | Operation                                      | 12 CPUs | 1 CPU   |
 | ---------------------------------------------- | ------- | ------- |
-| `Sign`, bottom tree cached                     | 54.0 ms | 331 ms  |
-| `Sign`, bottom tree not cached yet (builds it) | 747 ms  | 5.68 s  |
+| `Sign`, bottom tree cached                     | 43.4 ms | 287 ms  |
+| `Sign`, bottom tree not cached yet (builds it) | 725 ms  | 5.89 s  |
 
 Signing in a cached tree comes from `-bench SignCachedTree -benchtime 40x`, which
 signs at the same 40 leaf indices in every run, as the number of randomizer
@@ -174,8 +183,8 @@ Run the tests (about 18 s on the machine above):
 go test
 ```
 
-`-short` skips the two slowest tests, which tamper with every byte of a signature
-and fill the bottom-tree cache:
+`-short` skips the slowest tests, which tamper with every byte of a signature,
+fill the bottom-tree cache and check every trial below a found randomizer:
 
 ```sh
 go test -short

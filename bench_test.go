@@ -6,6 +6,9 @@ import "testing"
 // each iteration of the benchmarks below builds a tree.
 var nextBottomTree = uint32(1 << 10)
 
+// signedLeaves is how many leaf indices BenchmarkSignCachedTree signs at.
+const signedLeaves = 40
+
 // freshLeafIndex returns the first leaf index of a bottom tree never built before.
 func freshLeafIndex() uint32 {
 	nextBottomTree++
@@ -18,7 +21,10 @@ func BenchmarkNewKeyFromSeed(b *testing.B) {
 	}
 }
 
-// BenchmarkSignCachedTree signs in a bottom tree already built.
+// BenchmarkSignCachedTree signs in a bottom tree already built. The randomizer
+// search, most of the cost, takes a number of trials that depends on the leaf
+// index, so it cycles through the same signedLeaves leaf indices: run it with
+// -benchtime 40x, or any multiple of signedLeaves, for figures that compare.
 func BenchmarkSignCachedTree(b *testing.B) {
 	sk := sharedKey()
 	sk.Prepare(0)
@@ -26,7 +32,7 @@ func BenchmarkSignCachedTree(b *testing.B) {
 	b.ResetTimer()
 
 	for i := range b.N {
-		sk.Sign(uint32(i)%(1<<layerHeight), message)
+		sk.Sign(uint32(i%signedLeaves), message)
 	}
 }
 

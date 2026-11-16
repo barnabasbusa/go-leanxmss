@@ -6,6 +6,7 @@ import (
 	"math/bits"
 	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
 // The one-time signature, WOTS+C: v hash chains of 2^w - 1 steps, and a target-sum
@@ -141,6 +142,9 @@ type trialSearch struct {
 	state [25]uint64 // The padded block of P | A | M | 0, before the permutation.
 	at    int        // The lane R starts at.
 	base  u128
+
+	nextChunk atomic.Uint64
+	best      atomic.Uint64
 }
 
 const keccakRate = 136 // Keccak-256's block, in bytes.
@@ -165,44 +169,45 @@ func newTrialSearch(pp *publicParam, layer int, e uint32, message []byte, base u
 		s.state[i] = binary.LittleEndian.Uint64(block[8*i:])
 	}
 
+	s.best.Store(notFound)
 	return s
 }
 
 // leastTrial returns the least c below maxRandomizerTrials whose randomizer
 // base + c makes key e's digest of message on layer a codeword: the least, which
-// keeps one key to one codeword. The search is spread over all CPUs, in rounds of
-// consecutive chunks; the first chunk of a round holding a codeword holds the least.
+// keeps one key to one codeword. The search is spread over all CPUs: each
+// goroutine scans chunks of consecutive trials in increasing order, and stops at
+// the first chunk past a codeword found. Every chunk below the least codeword
+// is scanned.
 func leastTrial(pp *publicParam, layer int, e uint32, message []byte, base u128) (uint64, bool) {
 	s := newTrialSearch(pp, layer, e, message, base)
-	workers := runtime.GOMAXPROCS(0)
-	found := make([]uint64, workers)
-	round := uint64(workers) * trialChunk
 
-	for start := uint64(0); start < maxRandomizerTrials; start += round {
-		var wg sync.WaitGroup
-		for i := range workers {
-			found[i] = notFound
-			from := start + uint64(i)*trialChunk
-			if from >= maxRandomizerTrials {
-				continue
-			}
-
-			to := min(from+trialChunk, maxRandomizerTrials)
-			wg.Go(func() {
-				found[i] = s.firstTrial(from, to)
-			})
-		}
-
-		wg.Wait()
-
-		for _, c := range found {
-			if c != notFound {
-				return c, true
-			}
-		}
+	var wg sync.WaitGroup
+	for range runtime.GOMAXPROCS(0) {
+		wg.Go(s.work)
 	}
 
-	return 0, false
+	wg.Wait()
+
+	c := s.best.Load()
+	return c, c != notFound
+}
+
+func (s *trialSearch) work() {
+	for {
+		from := (s.nextChunk.Add(1) - 1) * trialChunk
+		if from >= maxRandomizerTrials || from >= s.best.Load() {
+			return
+		}
+
+		c := s.firstTrial(from, min(from+trialChunk, maxRandomizerTrials))
+		if c == notFound {
+			continue
+		}
+
+		for best := s.best.Load(); c < best && !s.best.CompareAndSwap(best, c); best = s.best.Load() {
+		}
+	}
 }
 
 // firstTrial returns the least c in [from, to) whose randomizer base + c makes the

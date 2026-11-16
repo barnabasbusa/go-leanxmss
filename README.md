@@ -105,6 +105,15 @@ zero. A trial copies that state, XORs its randomizer into two lanes, runs one
 Keccak-f[1600] permutation and reads the digest from the first two lanes, with no
 hashing API, buffering or byte encoding in between.
 
+### Parallel search
+
+The search hands out chunks of 4,096 consecutive trials, in increasing order,
+from a shared counter. Each goroutine takes the next chunk as soon as it has
+scanned one. Faster cores scan more chunks, and no goroutine waits for the
+others. A goroutine stops once its chunk starts at or above the least codeword
+found so far. Every chunk below that one is scanned. The search finds the
+least codeword whatever the scheduling, and signing stays deterministic.
+
 ## API
 
 ### `PrivateKey`
@@ -158,16 +167,16 @@ On an Apple M2 Max (12 cores), mean of 5 runs of `go test -run '^$' -bench . -co
 
 | Operation                              | 12 CPUs | 1 CPU   |
 | -------------------------------------- | ------- | ------- |
-| `NewKeyFromSeed` (builds the top tree) | 604 ms  | 5.60 s  |
-| `Prepare` (builds a bottom tree)       | 688 ms  | 5.81 s  |
-| `Verify`                               | 73.5 µs | 73.1 µs |
+| `NewKeyFromSeed` (builds the top tree) | 570 ms  | 5.52 s  |
+| `Prepare` (builds a bottom tree)       | 628 ms  | 5.25 s  |
+| `Verify`                               | 69.0 µs | 68.9 µs |
 
 Signing:
 
 | Operation                                      | 12 CPUs | 1 CPU   |
 | ---------------------------------------------- | ------- | ------- |
-| `Sign`, bottom tree cached                     | 43.4 ms | 287 ms  |
-| `Sign`, bottom tree not cached yet (builds it) | 725 ms  | 5.89 s  |
+| `Sign`, bottom tree cached                     | 30.7 ms | 271 ms  |
+| `Sign`, bottom tree not cached yet (builds it) | 700 ms  | 5.48 s  |
 
 Signing in a cached tree comes from `-bench SignCachedTree -benchtime 40x`, which
 signs at the same 40 leaf indices in every run, as the number of randomizer
@@ -177,7 +186,7 @@ harness: those two cells are the mean of the other 4 runs.
 
 ## Tests and benchmarks
 
-Run the tests (about 18 s on the machine above):
+Run the tests (about 17 s on the machine above):
 
 ```sh
 go test

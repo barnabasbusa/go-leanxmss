@@ -20,7 +20,10 @@ func Example() {
 	var message [32]byte
 	copy(message[:], "a 32-byte message, or its hash..")
 	const leafIndex = 42
-	sig := sk.Sign(leafIndex, message)
+	sig, err := sk.Sign(leafIndex, message)
+	if err != nil {
+		panic(err)
+	}
 
 	// Keys and signatures travel as bytes.
 	decoded, err := leanxmss.SignatureFromBytes(sig.Bytes())

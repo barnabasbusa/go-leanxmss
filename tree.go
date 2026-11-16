@@ -1,6 +1,7 @@
 package leanxmss
 
 import (
+	"fmt"
 	"runtime"
 	"sync"
 )
@@ -64,19 +65,20 @@ func (t *layerTree) root() digest {
 	return t.levels[layerHeight][0]
 }
 
-// path returns the authentication path of leaf, which must be in the tree.
-func (t *layerTree) path(leaf uint32) [layerHeight]digest {
+// path returns the authentication path of leaf, or an error if leaf is not in the
+// tree.
+func (t *layerTree) path(leaf uint32) ([layerHeight]digest, error) {
+	var path [layerHeight]digest
 	k := leaf - t.first
 	if k>>layerHeight != 0 {
-		panic("leanxmss: leaf outside the tree")
+		return path, fmt.Errorf("%w: leaf %d, tree from %d", errLeafOutside, leaf, t.first)
 	}
 
-	var path [layerHeight]digest
 	for level := range layerHeight {
 		path[level] = t.levels[level][(k>>level)^1]
 	}
 
-	return path
+	return path, nil
 }
 
 // pathRoot returns the root that leaf, at index e on layer, and its authentication

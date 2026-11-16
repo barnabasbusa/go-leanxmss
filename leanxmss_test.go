@@ -35,6 +35,26 @@ var sharedKey = sync.OnceValue(func() *PrivateKey {
 	return NewKeyFromSeed(seed)
 })
 
+// mustSign signs message at leafIndex with sk, and fails the test on an error.
+func mustSign(tb testing.TB, sk *PrivateKey, leafIndex uint32, message [messageSize]byte) *Signature {
+	tb.Helper()
+	sig, err := sk.Sign(leafIndex, message)
+	if err != nil {
+		tb.Fatalf("sign at %d: %v", leafIndex, err)
+	}
+
+	return sig
+}
+
+// mustPrepare prepares leafIndex's bottom tree in sk, and fails the test on an
+// error.
+func mustPrepare(tb testing.TB, sk *PrivateKey, leafIndex uint32) {
+	tb.Helper()
+	if err := sk.Prepare(leafIndex); err != nil {
+		tb.Fatalf("prepare %d: %v", leafIndex, err)
+	}
+}
+
 // TestAddressLayout checks the address layout, and Th as Keccak-256 of P | A | M
 // truncated, with the reference implementation's values.
 func TestAddressLayout(t *testing.T) {
@@ -194,17 +214,24 @@ func TestSignVerify(t *testing.T) {
 	message := testMessage()
 	other := uint32(7<<layerHeight + 3)
 
-	var wg sync.WaitGroup
-	wg.Go(func() { sk.Prepare(other) })
-	sk.Prepare(5)
-	wg.Wait()
+	var (
+		wg       sync.WaitGroup
+		otherErr error
+	)
 
-	first := sk.Sign(5, message)
+	wg.Go(func() { otherErr = sk.Prepare(other) })
+	mustPrepare(t, sk, 5)
+	wg.Wait()
+	if otherErr != nil {
+		t.Fatalf("prepare %d: %v", other, otherErr)
+	}
+
+	first := mustSign(t, sk, 5, message)
 	if !Verify(pk, 5, message, first) {
 		t.Fatal("signature at 5 does not verify")
 	}
 
-	otherTree := sk.Sign(other, message)
+	otherTree := mustSign(t, sk, other, message)
 	if !Verify(pk, other, message, otherTree) {
 		t.Fatal("signature in another bottom tree does not verify")
 	}
@@ -213,7 +240,7 @@ func TestSignVerify(t *testing.T) {
 		t.Error("two bottom trees share a top-layer signature")
 	}
 
-	if again := sk.Sign(5, message); !bytes.Equal(again.Bytes(), first.Bytes()) {
+	if again := mustSign(t, sk, 5, message); !bytes.Equal(again.Bytes(), first.Bytes()) {
 		t.Error("signing is not deterministic")
 	}
 
@@ -263,7 +290,7 @@ func TestTamperedSignature(t *testing.T) {
 	sk := sharedKey()
 	pk := sk.PublicKey()
 	message := testMessage()
-	encoded := sk.Sign(5, message).Bytes()
+	encoded := mustSign(t, sk, 5, message).Bytes()
 	for i := range encoded {
 		tampered := bytes.Clone(encoded)
 		tampered[i] ^= 0x01
@@ -283,7 +310,7 @@ func TestTamperedSignature(t *testing.T) {
 func TestLastLeafIndex(t *testing.T) {
 	sk := sharedKey()
 	message := testMessage()
-	sig := sk.Sign(0xFFFFFFFF, message)
+	sig := mustSign(t, sk, 0xFFFFFFFF, message)
 	if !Verify(sk.PublicKey(), 0xFFFFFFFF, message, sig) {
 		t.Error("the signature at the last leaf index does not verify")
 	}
@@ -302,7 +329,7 @@ func TestEncodingRoundTrip(t *testing.T) {
 		t.Fatalf("public key round trip: %v", err)
 	}
 
-	sig := sk.Sign(1, testMessage())
+	sig := mustSign(t, sk, 1, testMessage())
 	sigBytes := sig.Bytes()
 	if len(sigBytes) != signatureSize {
 		t.Fatalf("signature of %d bytes", len(sigBytes))
@@ -341,9 +368,9 @@ func TestBottomTreeCache(t *testing.T) {
 
 	sk := sharedKey()
 	message := testMessage()
-	first := sk.Sign(0, message).Bytes()
+	first := mustSign(t, sk, 0, message).Bytes()
 	for tree := uint32(1); tree <= maxCachedBottomTrees; tree++ {
-		sk.Prepare(tree << layerHeight)
+		mustPrepare(t, sk, tree<<layerHeight)
 	}
 
 	func() {
@@ -362,8 +389,8 @@ func TestBottomTreeCache(t *testing.T) {
 	}()
 
 	// Using tree 1 makes it the most recently used, so tree 2 is evicted next.
-	sk.Prepare(1 << layerHeight)
-	if again := sk.Sign(0, message).Bytes(); !bytes.Equal(again, first) {
+	mustPrepare(t, sk, 1<<layerHeight)
+	if again := mustSign(t, sk, 0, message).Bytes(); !bytes.Equal(again, first) {
 		t.Error("a signature from a rebuilt bottom tree differs")
 	}
 
@@ -392,18 +419,35 @@ func TestConcurrentSigning(t *testing.T) {
 	message := testMessage()
 	leaves := []uint32{10, 11, 3<<layerHeight + 1, 3<<layerHeight + 2}
 	sigs := make([]*Signature, len(leaves))
+	errs := make([]error, len(leaves))
 	var wg sync.WaitGroup
 	for i, leaf := range leaves {
 		wg.Go(func() {
-			sigs[i] = sk.Sign(leaf, message)
+			sigs[i], errs[i] = sk.Sign(leaf, message)
 		})
 	}
 
 	wg.Wait()
 
 	for i, sig := range sigs {
+		if errs[i] != nil {
+			t.Errorf("sign at %d: %v", leaves[i], errs[i])
+			continue
+		}
+
 		if !Verify(pk, leaves[i], message, sig) {
 			t.Errorf("signature at %d does not verify", leaves[i])
+		}
+	}
+}
+
+// TestPathOutsideTree checks that asking a tree for the path of a leaf it does not
+// hold returns an error instead of panicking.
+func TestPathOutsideTree(t *testing.T) {
+	tree := &layerTree{first: 1 << layerHeight}
+	for _, leaf := range []uint32{0, 1<<layerHeight - 1, 2 << layerHeight} {
+		if _, err := tree.path(leaf); !errors.Is(err, errLeafOutside) {
+			t.Errorf("path of leaf %d: %v", leaf, err)
 		}
 	}
 }

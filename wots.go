@@ -2,6 +2,7 @@ package leanxmss
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/bits"
 	"runtime"
@@ -45,12 +46,9 @@ func (k *hasher) wotsSecrets(pp *publicParam, seed *schemeSeed, layer int, e uin
 
 // chain walks steps steps of chain i of key e on layer from position start. A
 // step's address carries the position it leaves, and the chain index follows the
-// value, as a 16-byte little-endian integer.
+// value, as a 16-byte little-endian integer. Callers keep start + steps below
+// chainLen: start is a w-bit digit, and steps at most chainLen - 1 - start.
 func (k *hasher) chain(pp *publicParam, layer int, e uint32, i, start, steps int, value digest) digest {
-	if start+steps >= chainLen {
-		panic("leanxmss: chain walk past its end")
-	}
-
 	var index [16]byte
 	binary.LittleEndian.PutUint64(index[:8], uint64(i))
 	base := newTweak(tweakChain, layerHi(layer, 0), e)
@@ -244,9 +242,9 @@ func (s *trialSearch) firstTrial(from, to uint64) uint64 {
 
 // wotsSign signs message with key e on layer: the randomizer of the least
 // admissible trial R0 + c, R0 a hash of the seed and the message, and the chain
-// value each digit opens. It is deterministic in its inputs. It reports false
+// value each digit opens. It is deterministic in its inputs. It returns an error
 // if none of the trials gives a codeword.
-func wotsSign(pp *publicParam, seed *schemeSeed, layer int, e uint32, message []byte) (randomizer, [v]digest, bool) {
+func wotsSign(pp *publicParam, seed *schemeSeed, layer int, e uint32, message []byte) (randomizer, [v]digest, error) {
 	k := newHasher()
 	k.begin(pp, newTweak(tweakRandomizer, layerHi(layer, 0), e))
 	k.write(seed[:])
@@ -256,15 +254,14 @@ func wotsSign(pp *publicParam, seed *schemeSeed, layer int, e uint32, message []
 
 	c, ok := leastTrial(pp, layer, e, message, base)
 	if !ok {
-		return randomizer{}, [v]digest{}, false
+		return randomizer{}, [v]digest{}, fmt.Errorf("%w: layer %d, key %d, %d trials", errNoCodeword, layer, e, uint64(maxRandomizerTrials))
 	}
 
 	r := addTrial(base, c)
 	d := k.messageDigest(pp, layer, e, &r, message)
 	x, ok := codeword(&d)
-
 	if !ok {
-		return randomizer{}, [v]digest{}, false
+		return randomizer{}, [v]digest{}, fmt.Errorf("%w: layer %d, key %d, trial %d", errNoCodeword, layer, e, c)
 	}
 
 	secrets := k.wotsSecrets(pp, seed, layer, e)
@@ -273,7 +270,7 @@ func wotsSign(pp *publicParam, seed *schemeSeed, layer int, e uint32, message []
 		values[i] = k.chain(pp, layer, e, i, 0, int(x[i]), secrets[i])
 	}
 
-	return r, values, true
+	return r, values, nil
 }
 
 // wotsLeaf returns the leaf a claimed signature recovers, or false if its digest

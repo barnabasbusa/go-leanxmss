@@ -43,7 +43,10 @@ func main() {
 
 	// Never sign two different messages at the same leaf index.
 	const leafIndex = 42
-	sig := sk.Sign(leafIndex, message)
+	sig, err := sk.Sign(leafIndex, message)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Keys and signatures travel as bytes.
 	pkBytes, sigBytes := pk.Bytes(), sig.Bytes()
@@ -153,12 +156,12 @@ and cannot be disabled.
 
 Safe for concurrent use.
 
-| Function                                                            | Description                                                                                |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `NewKeyFromSeed(seed [32]byte) *PrivateKey`                         | Returns the private key of a seed. Builds the top tree.                                    |
-| `(*PrivateKey).PublicKey() PublicKey`                               | Returns the public key.                                                                    |
-| `(*PrivateKey).Sign(leafIndex uint32, message [32]byte) *Signature` | Signs a message at a leaf index. Never sign two different messages at the same leaf index. |
-| `(*PrivateKey).Prepare(leafIndex uint32)`                           | Builds the bottom tree of a leaf index ahead of time.                                      |
+| Function                                                                     | Description                                                                                |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `NewKeyFromSeed(seed [32]byte) *PrivateKey`                                  | Returns the private key of a seed. Builds the top tree.                                    |
+| `(*PrivateKey).PublicKey() PublicKey`                                        | Returns the public key.                                                                    |
+| `(*PrivateKey).Sign(leafIndex uint32, message [32]byte) (*Signature, error)` | Signs a message at a leaf index. Never sign two different messages at the same leaf index. |
+| `(*PrivateKey).Prepare(leafIndex uint32) error`                              | Builds the bottom tree of a leaf index ahead of time.                                      |
 
 ### `PublicKey`
 

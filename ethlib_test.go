@@ -323,7 +323,7 @@ func TestSignMatchesEthlib(t *testing.T) {
 				keys[seed] = sk
 			}
 
-			got = bytesValue(sk.Sign(uint32(leafIndex), message).Bytes())
+			got = bytesValue(mustSign(t, sk, uint32(leafIndex), message).Bytes())
 		}
 
 		checkOutput(t, c, got)

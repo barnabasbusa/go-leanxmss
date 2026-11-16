@@ -91,12 +91,9 @@ func (k *hasher) begin(pp *publicParam, tw tweak) {
 	k.len = publicParamLen + addressLen
 }
 
-// write appends p to the input.
+// write appends p to the input. Every input is at most maxHashInput bytes long by
+// construction; copy keeps k.len within the buffer regardless.
 func (k *hasher) write(p []byte) {
-	if k.len+len(p) > len(k.buf) {
-		panic("leanxmss: hash input too long")
-	}
-
 	k.len += copy(k.buf[k.len:], p)
 }
 

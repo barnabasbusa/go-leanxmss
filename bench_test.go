@@ -27,12 +27,12 @@ func BenchmarkNewKeyFromSeed(b *testing.B) {
 // -benchtime 40x, or any multiple of signedLeaves, for figures that compare.
 func BenchmarkSignCachedTree(b *testing.B) {
 	sk := sharedKey()
-	sk.Prepare(0)
+	mustPrepare(b, sk, 0)
 	message := testMessage()
 	b.ResetTimer()
 
 	for i := range b.N {
-		sk.Sign(uint32(i%signedLeaves), message)
+		mustSign(b, sk, uint32(i%signedLeaves), message)
 	}
 }
 
@@ -41,7 +41,7 @@ func BenchmarkPrepare(b *testing.B) {
 	sk := sharedKey()
 
 	for b.Loop() {
-		sk.Prepare(freshLeafIndex())
+		mustPrepare(b, sk, freshLeafIndex())
 	}
 }
 
@@ -52,14 +52,14 @@ func BenchmarkSignNewTree(b *testing.B) {
 	message := testMessage()
 
 	for b.Loop() {
-		sk.Sign(freshLeafIndex(), message)
+		mustSign(b, sk, freshLeafIndex(), message)
 	}
 }
 
 func BenchmarkVerify(b *testing.B) {
 	sk := sharedKey()
 	message := testMessage()
-	sig := sk.Sign(0, message)
+	sig := mustSign(b, sk, 0, message)
 	pk := sk.PublicKey()
 	b.ReportAllocs()
 

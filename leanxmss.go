@@ -7,9 +7,11 @@ import (
 	"sync"
 )
 
-// errInvalidLength is returned when an encoded public key or signature has the
-// wrong length.
-var errInvalidLength = errors.New("leanxmss: invalid length")
+var (
+	errInvalidLength = errors.New("leanxmss: invalid length")         // An encoded public key or signature has the wrong length.
+	errNoCodeword    = errors.New("leanxmss: no admissible encoding") // None of a layer's randomizer trials gives a codeword.
+	errLeafOutside   = errors.New("leanxmss: leaf outside the tree")  // A leaf is not in the tree asked for its path.
+)
 
 // PublicKey is a leanXMSS public key: the root of the top tree and the public
 // parameter. It is comparable with ==.
@@ -156,13 +158,22 @@ func (sk *PrivateKey) PublicKey() PublicKey {
 // same leaf index again gives the same signature. The first signature in a bottom
 // tree builds that tree, see [PrivateKey.Prepare].
 //
-// Sign panics if none of a layer's 2^32 randomizer trials gives a codeword, which
-// happens with probability below 2^-2954: never in practice.
-func (sk *PrivateKey) Sign(leafIndex uint32, message [32]byte) *Signature {
-	bottom := sk.bottomTree(leafIndex)
-	r, values, ok := wotsSign(&sk.publicParam, &sk.seed, 0, leafIndex, message[:])
-	if !ok {
-		panic("leanxmss: no admissible encoding")
+// Sign returns an error if none of a layer's 2^32 randomizer trials gives a
+// codeword, which happens with probability below 2^-2954: never in practice.
+func (sk *PrivateKey) Sign(leafIndex uint32, message [32]byte) (*Signature, error) {
+	bottom, err := sk.bottomTree(leafIndex)
+	if err != nil {
+		return nil, fmt.Errorf("bottom tree of leaf %d: %w", leafIndex, err)
+	}
+
+	r, values, err := wotsSign(&sk.publicParam, &sk.seed, 0, leafIndex, message[:])
+	if err != nil {
+		return nil, fmt.Errorf("one-time signature at leaf %d: %w", leafIndex, err)
+	}
+
+	path, err := bottom.tree.path(leafIndex)
+	if err != nil {
+		return nil, fmt.Errorf("authentication path of leaf %d: %w", leafIndex, err)
 	}
 
 	return &Signature{
@@ -170,22 +181,27 @@ func (sk *PrivateKey) Sign(leafIndex uint32, message [32]byte) *Signature {
 		bottom: layerSignature{
 			randomizer:  r,
 			chainValues: values,
-			path:        bottom.tree.path(leafIndex),
+			path:        path,
 		},
 		top: bottom.topSignature,
-	}
+	}, nil
 }
 
 // Prepare makes later signing at leafIndex faster, by building and caching the
-// bottom tree leafIndex is in. The cache holds 8 trees.
-func (sk *PrivateKey) Prepare(leafIndex uint32) {
-	sk.bottomTree(leafIndex)
+// bottom tree leafIndex is in. The cache holds 8 trees. It returns an error in the
+// same never expected case as [PrivateKey.Sign].
+func (sk *PrivateKey) Prepare(leafIndex uint32) error {
+	if _, err := sk.bottomTree(leafIndex); err != nil {
+		return fmt.Errorf("bottom tree of leaf %d: %w", leafIndex, err)
+	}
+
+	return nil
 }
 
 // bottomTree returns the bottom tree leafIndex is in, with the top layer's
 // signature of its root: the cached one, or built and cached. It is built outside
 // the lock, which is only held to read or update the cache.
-func (sk *PrivateKey) bottomTree(leafIndex uint32) *bottomTree {
+func (sk *PrivateKey) bottomTree(leafIndex uint32) (*bottomTree, error) {
 	index := layerIndex(leafIndex, 1)
 	cached := func() *bottomTree {
 		sk.mu.Lock()
@@ -195,14 +211,19 @@ func (sk *PrivateKey) bottomTree(leafIndex uint32) *bottomTree {
 	}()
 
 	if cached != nil {
-		return cached
+		return cached, nil
 	}
 
 	tree := buildLayerTree(&sk.publicParam, &sk.seed, 0, index)
 	root := tree.root()
-	r, values, ok := wotsSign(&sk.publicParam, &sk.seed, 1, index, root[:])
-	if !ok {
-		panic("leanxmss: no admissible encoding")
+	r, values, err := wotsSign(&sk.publicParam, &sk.seed, 1, index, root[:])
+	if err != nil {
+		return nil, fmt.Errorf("top one-time signature of bottom tree %d: %w", index, err)
+	}
+
+	topPath, err := sk.top.path(index)
+	if err != nil {
+		return nil, fmt.Errorf("authentication path of bottom tree %d: %w", index, err)
 	}
 
 	bottom := &bottomTree{
@@ -211,7 +232,7 @@ func (sk *PrivateKey) bottomTree(leafIndex uint32) *bottomTree {
 		topSignature: layerSignature{
 			randomizer:  r,
 			chainValues: values,
-			path:        sk.top.path(index),
+			path:        topPath,
 		},
 	}
 
@@ -220,7 +241,7 @@ func (sk *PrivateKey) bottomTree(leafIndex uint32) *bottomTree {
 
 	// Another goroutine may have built it meanwhile.
 	if cached := sk.useCached(index); cached != nil {
-		return cached
+		return cached, nil
 	}
 
 	sk.bottoms = append(sk.bottoms, bottom)
@@ -228,7 +249,7 @@ func (sk *PrivateKey) bottomTree(leafIndex uint32) *bottomTree {
 		sk.bottoms = append(sk.bottoms[:0], sk.bottoms[1:]...)
 	}
 
-	return bottom
+	return bottom, nil
 }
 
 // useCached returns bottom tree index if cached, moved to the most recently used

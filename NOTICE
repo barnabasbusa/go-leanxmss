@@ -10,3 +10,7 @@ a2a9e655f965dbadf33b3acfbc645696078fc75d, as vendored by leanVM.
 keccakf_arm64.s is adapted from Go's crypto/internal/fips140/sha3/sha3_arm64.s,
 Copyright 2022 The Go Authors, licensed under the BSD-style license in
 LICENSE-GO.
+
+keccakf_amd64.s is copied from Go's crypto/internal/fips140/sha3/sha3_amd64.s,
+Copyright 2024 The Go Authors, licensed under the BSD-style license in
+LICENSE-GO.

@@ -1,3 +1,5 @@
+//go:build !amd64 || purego
+
 package leanxmss
 
 // keccakF1600 is the Keccak-f[1600] permutation.

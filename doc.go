@@ -27,4 +27,8 @@
 // cost. Both are spread over all CPUs. A [PrivateKey] caches the 8 bottom trees
 // it used last; [PrivateKey.Prepare] builds one
 // ahead of time. Verification costs 186 permutations.
+//
+// Signing is mostly the search for a randomizer, about a million permutations.
+// On arm64 CPUs with the Armv8.2 SHA3 instructions, it permutes two Keccak states
+// at once with them, unless built with the purego tag.
 package leanxmss

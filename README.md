@@ -114,6 +114,39 @@ others. A goroutine stops once its chunk starts at or above the least codeword
 found so far. Every chunk below that one is scanned. The search finds the
 least codeword whatever the scheduling, and signing stays deterministic.
 
+### The SHA3 instructions
+
+The search tries two randomizers per call, by permuting two Keccak states
+together. On arm64, the vector unit (NEON) has 128-bit registers, each able to
+hold two of Keccak's 64-bit lanes. The optional Armv8.2 SHA3 extension adds four
+vector instructions that do Keccak's steps in fewer instructions: `EOR3` (XOR of
+three values), `RAX1` (XOR with a value rotated by one), `XAR` (XOR then rotate)
+and `BCAX` (AND-NOT then XOR). [`keccakf_arm64.s`](keccakf_arm64.s), adapted from
+Go's standard library, loads lane i of both states into register i, so one pass
+of these instructions permutes both. It is in assembly because the Go compiler
+never emits these instructions.
+
+### Disabling the SHA3 instructions
+
+The SHA3 instructions change only the speed: keys and signatures are the same
+byte for byte. To use the pure Go permutations instead in a program such as the
+example at the top of this page, built with `go build -o example .`, either set
+`GODEBUG` when running it, with no rebuild:
+
+```sh
+GODEBUG=cpu.sha3=off ./example
+```
+
+or build it without the assembly:
+
+```sh
+go build -tags purego -o example .
+./example
+```
+
+Either way, signing is slower. The rest of the search does not depend on the CPU,
+and cannot be disabled.
+
 ## API
 
 ### `PrivateKey`
@@ -167,16 +200,16 @@ On an Apple M2 Max (12 cores), mean of 5 runs of `go test -run '^$' -bench . -co
 
 | Operation                              | 12 CPUs | 1 CPU   |
 | -------------------------------------- | ------- | ------- |
-| `NewKeyFromSeed` (builds the top tree) | 570 ms  | 5.52 s  |
-| `Prepare` (builds a bottom tree)       | 628 ms  | 5.25 s  |
-| `Verify`                               | 69.0 µs | 68.9 µs |
+| `NewKeyFromSeed` (builds the top tree) | 580 ms  | 5.17 s  |
+| `Prepare` (builds a bottom tree)       | 626 ms  | 5.28 s  |
+| `Verify`                               | 71.8 µs | 70.3 µs |
 
-Signing:
+Signing, with the SHA3 instructions and without them (`GODEBUG=cpu.sha3=off`):
 
-| Operation                                      | 12 CPUs | 1 CPU   |
-| ---------------------------------------------- | ------- | ------- |
-| `Sign`, bottom tree cached                     | 30.7 ms | 271 ms  |
-| `Sign`, bottom tree not cached yet (builds it) | 700 ms  | 5.48 s  |
+| Operation                                      | 12 CPUs, SHA3 | 12 CPUs, no SHA3 | 1 CPU, SHA3 | 1 CPU, no SHA3 |
+| ---------------------------------------------- | ------------- | ---------------- | ----------- | -------------- |
+| `Sign`, bottom tree cached                     | 8.8 ms        | 35.2 ms          | 76.6 ms     | 310 ms         |
+| `Sign`, bottom tree not cached yet (builds it) | 680 ms        | 760 ms           | 5.44 s      | 5.75 s         |
 
 Signing in a cached tree comes from `-bench SignCachedTree -benchtime 40x`, which
 signs at the same 40 leaf indices in every run, as the number of randomizer
@@ -186,7 +219,7 @@ harness: those two cells are the mean of the other 4 runs.
 
 ## Tests and benchmarks
 
-Run the tests (about 17 s on the machine above):
+Run the tests (about 16 s on the machine above):
 
 ```sh
 go test
@@ -197,6 +230,13 @@ fill the bottom-tree cache and check every trial below a found randomizer:
 
 ```sh
 go test -short
+```
+
+Run them with the pure Go permutations only, which every architecture but arm64
+uses:
+
+```sh
+go test -tags purego
 ```
 
 Run the tests, then the benchmarks:

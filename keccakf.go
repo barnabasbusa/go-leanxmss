@@ -101,3 +101,18 @@ func keccakF1600(s *[25]uint64) {
 
 	s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10], s[11], s[12], s[13], s[14], s[15], s[16], s[17], s[18], s[19], s[20], s[21], s[22], s[23], s[24] = a00, a01, a02, a03, a04, a10, a11, a12, a13, a14, a20, a21, a22, a23, a24, a30, a31, a32, a33, a34, a40, a41, a42, a43, a44
 }
+
+// keccakF1600x2Generic is Keccak-f[1600] of two interleaved states, as
+// keccakF1600x2, by two scalar permutations.
+func keccakF1600x2Generic(s *[50]uint64) {
+	var a, b [25]uint64
+	for i := range a {
+		a[i], b[i] = s[2*i], s[2*i+1]
+	}
+
+	keccakF1600(&a)
+	keccakF1600(&b)
+	for i := range a {
+		s[2*i], s[2*i+1] = a[i], b[i]
+	}
+}

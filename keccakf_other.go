@@ -10,3 +10,8 @@ var useSHA3 = false
 func keccakF1600x2(s *[50]uint64) {
 	keccakF1600x2Generic(s)
 }
+
+// firstTrialSHA3 is never called: useSHA3 is false.
+func (s *trialSearch) firstTrialSHA3(from, to uint64) uint64 {
+	panic("leanxmss: no SHA3 instructions")
+}

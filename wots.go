@@ -154,6 +154,8 @@ var (
 	_ = [1]int{}[(publicParamLen+addressLen+messageSize+randomizerLen)/keccakRate]
 	_ = [1]int{}[(publicParamLen+addressLen+messageSize)%8]
 	_ = [1]int{}[(publicParamLen+addressLen+n)%8]
+	_ = [1]int{}[(publicParamLen+addressLen+n)/8-6] // the randomizer starts at lane 6 or 8, as searchNEON expects
+	_ = [1]int{}[(publicParamLen+addressLen+messageSize)/8-8]
 	_ = [1]int{}[trialChunk%2] // trials come in pairs
 )
 
@@ -212,30 +214,25 @@ func (s *trialSearch) work() {
 }
 
 // firstTrial returns the least c in [from, to) whose randomizer base + c makes the
-// digest a codeword, or notFound. It tries two at once; from and to are even.
+// digest a codeword, or notFound. from and to are even.
 func (s *trialSearch) firstTrial(from, to uint64) uint64 {
-	var st [50]uint64
-	at := s.at
-	for c := from; c < to; c += 2 {
-		for i, lane := range s.state {
-			st[2*i], st[2*i+1] = lane, lane
-		}
+	if useSHA3 {
+		return s.firstTrialSHA3(from, to)
+	}
 
-		lo0, carry0 := bits.Add64(s.base.lo, c, 0)
-		lo1, carry1 := bits.Add64(s.base.lo, c+1, 0)
-		st[2*at] ^= lo0
-		st[2*at+1] ^= lo1
-		st[2*at+2] ^= s.base.hi + carry0
-		st[2*at+3] ^= s.base.hi + carry1
-		keccakF1600x2(&st)
+	return s.firstTrialScalar(from, to)
+}
 
-		// The digest's first 16 bytes are lanes 0 and 1, little endian.
-		if isCodeword(st[0], st[2]) {
+// firstTrialScalar is firstTrial in pure Go, one trial at a time.
+func (s *trialSearch) firstTrialScalar(from, to uint64) uint64 {
+	for c := from; c < to; c++ {
+		st := s.state
+		lo, carry := bits.Add64(s.base.lo, c, 0)
+		st[s.at] ^= lo
+		st[s.at+1] ^= s.base.hi + carry
+
+		if isCodeword(keccakF1600Digest(&st)) {
 			return c
-		}
-
-		if isCodeword(st[1], st[3]) {
-			return c + 1
 		}
 	}
 

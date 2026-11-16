@@ -30,12 +30,36 @@ var keccakRoundConstants = [24]uint64{
 	0x8000000080008008,
 }
 
-// keccakF1600 is the Keccak-f[1600] permutation, each round unrolled over the 25
-// lanes, lane x + 5y named a<y><x>.
-func keccakF1600(s *[25]uint64) {
+// keccakF1600Generic is the Keccak-f[1600] permutation, in pure Go.
+func keccakF1600Generic(s *[25]uint64) {
+	keccakRounds(s, keccakRoundConstants[:])
+}
+
+// keccakF1600DigestGeneric returns, in pure Go, lanes 0 and 1 of the
+// Keccak-f[1600] permutation of s, the first 16 bytes of a one-block hash, and
+// leaves s in an unspecified state. Its last round computes those two lanes only.
+func keccakF1600DigestGeneric(s *[25]uint64) (uint64, uint64) {
+	keccakRounds(s, keccakRoundConstants[:len(keccakRoundConstants)-1])
+
+	c0 := s[0] ^ s[5] ^ s[10] ^ s[15] ^ s[20]
+	c1 := s[1] ^ s[6] ^ s[11] ^ s[16] ^ s[21]
+	c2 := s[2] ^ s[7] ^ s[12] ^ s[17] ^ s[22]
+	c3 := s[3] ^ s[8] ^ s[13] ^ s[18] ^ s[23]
+	c4 := s[4] ^ s[9] ^ s[14] ^ s[19] ^ s[24]
+	b00 := s[0] ^ c4 ^ bits.RotateLeft64(c1, 1)
+	b01 := bits.RotateLeft64(s[6]^c0^bits.RotateLeft64(c2, 1), 44)
+	b02 := bits.RotateLeft64(s[12]^c1^bits.RotateLeft64(c3, 1), 43)
+	b03 := bits.RotateLeft64(s[18]^c2^bits.RotateLeft64(c4, 1), 21)
+
+	return b00 ^ (b02 &^ b01) ^ keccakRoundConstants[len(keccakRoundConstants)-1], b01 ^ (b03 &^ b02)
+}
+
+// keccakRounds runs the rounds of Keccak-f[1600] with constants rcs on s, each
+// round unrolled over the 25 lanes, lane x + 5y named a<y><x>.
+func keccakRounds(s *[25]uint64, rcs []uint64) {
 	a00, a01, a02, a03, a04, a10, a11, a12, a13, a14, a20, a21, a22, a23, a24, a30, a31, a32, a33, a34, a40, a41, a42, a43, a44 := s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10], s[11], s[12], s[13], s[14], s[15], s[16], s[17], s[18], s[19], s[20], s[21], s[22], s[23], s[24]
 
-	for _, rc := range keccakRoundConstants {
+	for _, rc := range rcs {
 		// θ, then ρ and π into b (lane (x, y) of the result reads b<y><x>), then χ and ι.
 		c0 := a00 ^ a10 ^ a20 ^ a30 ^ a40
 		c1 := a01 ^ a11 ^ a21 ^ a31 ^ a41

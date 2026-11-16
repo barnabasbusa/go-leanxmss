@@ -69,3 +69,28 @@ func BenchmarkVerify(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkSearchTrials scans chunks of consecutive randomizer trials on one
+// goroutine, past any codeword, and reports the time per trial: the cost of the
+// search, whatever the number of trials a signature takes.
+func BenchmarkSearchTrials(b *testing.B) {
+	var pp publicParam
+	message := testMessage()
+	s := newTrialSearch(&pp, 0, 1, message[:], u128{})
+	var from uint64
+	for b.Loop() {
+		to := from + trialChunk
+		for from < to {
+			c := s.firstTrial(from, to)
+			if c == notFound {
+				break
+			}
+
+			from = c&^1 + 2 // firstTrial starts at even trials.
+		}
+
+		from = to
+	}
+
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*trialChunk), "ns/trial")
+}

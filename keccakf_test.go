@@ -33,6 +33,35 @@ func TestKeccakF1600(t *testing.T) {
 	}
 }
 
+// TestKeccakF1600Backends checks the pure Go permutation, and the digest's two
+// lanes of both, against keccakF1600.
+func TestKeccakF1600Backends(t *testing.T) {
+	x := uint64(0xfedcba9876543210)
+	var s [25]uint64
+	for i := range s {
+		x = x*6364136223846793005 + 1442695040888963407
+		s[i] = x
+	}
+
+	want := s
+	keccakF1600(&want)
+	generic := s
+	keccakF1600Generic(&generic)
+	if generic != want {
+		t.Errorf("generic: %x, want %x", generic, want)
+	}
+
+	for name, digest := range map[string]func(*[25]uint64) (uint64, uint64){
+		"keccakF1600Digest":        keccakF1600Digest,
+		"keccakF1600DigestGeneric": keccakF1600DigestGeneric,
+	} {
+		in := s
+		if lo, hi := digest(&in); lo != want[0] || hi != want[1] {
+			t.Errorf("%s: %x %x, want %x %x", name, lo, hi, want[0], want[1])
+		}
+	}
+}
+
 // TestKeccakF1600x2 checks the two-state permutation, on every backend this CPU
 // can run, against two scalar ones.
 func TestKeccakF1600x2(t *testing.T) {

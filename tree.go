@@ -3,9 +3,14 @@ package leanxmss
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
-const layerWidth = 1 << layerHeight // Number of leaves of a layer's tree.
+const (
+	layerWidth    = 1 << layerHeight                   // Number of leaves of a layer's tree.
+	subtreeHeight = 8                                  // Height of the subtrees a tree's build is split into.
+	subtrees      = 1 << (layerHeight - subtreeHeight) // Number of subtrees of a layer's tree.
+)
 
 // One layer's Merkle tree over 2^16 leaves. Nodes are indexed on the layer, as
 // their addresses are: a bottom tree's leaves by their leaf indices.
@@ -24,40 +29,59 @@ type layerTree struct {
 	levels [layerHeight + 1][]digest // levels[l] holds the nodes of level l, from index first >> l on.
 }
 
-// buildLayerTree builds tree index of layer. The leaves are computed on all CPUs.
+// buildLayerTree builds tree index of layer, on all CPUs. Each goroutine takes
+// the next subtree of 2^subtreeHeight leaves from a shared counter as soon as it
+// has built one, so faster cores build more, and the levels above the subtrees
+// are built last.
 func buildLayerTree(pp *publicParam, seed *schemeSeed, layer int, index uint32) *layerTree {
 	t := &layerTree{first: index << layerHeight}
+	for level := range t.levels {
+		t.levels[level] = make([]digest, layerWidth>>level)
+	}
 
-	leaves := make([]digest, layerWidth)
-	workers := min(runtime.GOMAXPROCS(0), layerWidth)
-
+	var next atomic.Uint32
 	var wg sync.WaitGroup
-	for i := range workers {
-		from, to := i*layerWidth/workers, (i+1)*layerWidth/workers
+	for range min(runtime.GOMAXPROCS(0), subtrees) {
 		wg.Go(func() {
-			k := newHasher()
-			for j := from; j < to; j++ {
-				leaves[j] = k.wotsPublicLeaf(pp, seed, layer, t.first+uint32(j))
+			leaves := newLeafPair(pp, seed, layer)
+			for {
+				s := next.Add(1) - 1
+				if s >= subtrees {
+					return
+				}
+
+				t.buildSubtree(leaves, layer, s)
 			}
 		})
 	}
 
 	wg.Wait()
-	t.levels[0] = leaves
 
-	k := newHasher()
-	for level := 1; level <= layerHeight; level++ {
-		below := t.levels[level-1]
-		up := make([]digest, len(below)/2)
-		base := t.first >> level
-		for j := range up {
-			up[j] = k.node(pp, layer, level, base+uint32(j), &below[2*j], &below[2*j+1])
-		}
-
-		t.levels[level] = up
+	b := newBlockPair(pp)
+	for level := subtreeHeight + 1; level <= layerHeight; level++ {
+		t.hashLevel(b, layer, level, 0, layerWidth>>level)
 	}
 
 	return t
+}
+
+// buildSubtree computes the leaves and nodes of subtree s, up to its root.
+func (t *layerTree) buildSubtree(leaves *leafPair, layer int, s uint32) {
+	from := s << subtreeHeight
+	for j := from; j < from+1<<subtreeHeight; j += 2 {
+		t.levels[0][j], t.levels[0][j+1] = leaves.leaves(t.first + j)
+	}
+
+	for level := 1; level <= subtreeHeight; level++ {
+		width := 1 << (subtreeHeight - level)
+		t.hashLevel(leaves.blocks, layer, level, int(s)*width, int(s+1)*width)
+	}
+}
+
+// hashLevel computes the nodes of level with indices in [from, to), relative to
+// the tree's first node on that level.
+func (t *layerTree) hashLevel(b *blockPair, layer, level, from, to int) {
+	b.nodes(layer, level, t.first>>level, t.levels[level-1], t.levels[level], from, to)
 }
 
 func (t *layerTree) root() digest {

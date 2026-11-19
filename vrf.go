@@ -1,7 +1,6 @@
 package leanxmss
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"math/bits"
@@ -14,22 +13,23 @@ const (
 	// VRFProofLen is the number of hashes of a VRF proof: the leaf, then its path.
 	VRFProofLen = VRFTreeDepth + 1
 	// VRFStateSize is the length of an encoded [VRFState], in bytes.
-	VRFStateSize = leafIndexSize + VRFTreeDepth*sha256.Size
+	VRFStateSize = leafIndexSize + VRFTreeDepth*vrfHashSize
 	// DefaultVRFLeaves is how many leaves devnets fill: enough for 145 days of 12 s slots.
 	DefaultVRFLeaves = 1 << 20
 
+	vrfHashSize      = 32
 	vrfLeaves        = 1 << VRFTreeDepth
 	vrfParallelLevel = 12
 )
 
-// VRFKey derives the leaves of a VRF tree, the SHA-256 Merkle tree whose root a
+// VRFKey derives the leaves of a VRF tree, the Keccak-256 Merkle tree whose root a
 // validator registers and whose leaf for a slot a block reveals as its RANDAO
-// contribution. Leaf i is SHA-256(seed | i as 8 little-endian bytes) below the
+// contribution. Leaf i is Keccak-256(seed | i as 8 little-endian bytes) below the
 // number of filled leaves and zero from there on.
 type VRFKey struct {
-	seed   [sha256.Size]byte
+	seed   [vrfHashSize]byte
 	leaves uint64
-	zeros  [VRFTreeDepth][sha256.Size]byte
+	zeros  [VRFTreeDepth][vrfHashSize]byte
 	tokens chan struct{}
 }
 
@@ -37,12 +37,12 @@ type VRFKey struct {
 // leaf's path. It holds nothing secret once the leaf is revealed.
 type VRFState struct {
 	slot uint32
-	path [VRFTreeDepth][sha256.Size]byte
+	path [VRFTreeDepth][vrfHashSize]byte
 }
 
 // NewVRFKey returns the key of a seed with its first leaves filled, at most 2^31.
 // It builds no tree.
-func NewVRFKey(seed [sha256.Size]byte, leaves uint64) (*VRFKey, error) {
+func NewVRFKey(seed [vrfHashSize]byte, leaves uint64) (*VRFKey, error) {
 	if leaves > vrfLeaves {
 		return nil, fmt.Errorf("%w: %d filled leaves, at most %d", errLeafOutside, leaves, uint64(vrfLeaves))
 	}
@@ -94,13 +94,13 @@ func (k *VRFKey) Advance(s *VRFState, slot uint32) (*VRFState, error) {
 }
 
 // Root returns the root s leads to under k's seed: the validator's VRF root.
-func (k *VRFKey) Root(s *VRFState) [sha256.Size]byte {
+func (k *VRFKey) Root(s *VRFState) [vrfHashSize]byte {
 	return k.fold(s, VRFTreeDepth)
 }
 
 // Proof returns the proof of the slot of s: its leaf, then the leaf's path.
-func (k *VRFKey) Proof(s *VRFState) [VRFProofLen][sha256.Size]byte {
-	var proof [VRFProofLen][sha256.Size]byte
+func (k *VRFKey) Proof(s *VRFState) [VRFProofLen][vrfHashSize]byte {
+	var proof [VRFProofLen][vrfHashSize]byte
 
 	proof[0] = k.leaf(uint64(s.slot))
 	copy(proof[1:], s.path[:])
@@ -137,7 +137,7 @@ func VRFStateFromBytes(b []byte) (*VRFState, error) {
 	}
 
 	for i := range s.path {
-		copy(s.path[i][:], b[leafIndexSize+i*sha256.Size:])
+		copy(s.path[i][:], b[leafIndexSize+i*vrfHashSize:])
 	}
 
 	return s, nil
@@ -146,7 +146,7 @@ func VRFStateFromBytes(b []byte) (*VRFState, error) {
 // VerifyVRFProof reports whether proof opens the leaf of slot under root, as
 // is_valid_vrf_proof of the consensus specifications does: only the 31 low bits
 // of the slot count.
-func VerifyVRFProof(root [sha256.Size]byte, slot uint64, proof *[VRFProofLen][sha256.Size]byte) bool {
+func VerifyVRFProof(root [vrfHashSize]byte, slot uint64, proof *[VRFProofLen][vrfHashSize]byte) bool {
 	node := proof[0]
 	for level := range VRFTreeDepth {
 		if (slot>>level)&1 == 0 {
@@ -160,20 +160,20 @@ func VerifyVRFProof(root [sha256.Size]byte, slot uint64, proof *[VRFProofLen][sh
 	return node == root
 }
 
-func (k *VRFKey) leaf(index uint64) [sha256.Size]byte {
+func (k *VRFKey) leaf(index uint64) [vrfHashSize]byte {
 	if index >= k.leaves {
 		return k.zeros[0]
 	}
 
-	var input [sha256.Size + 8]byte
+	var input [vrfHashSize + 8]byte
 
 	copy(input[:], k.seed[:])
-	binary.LittleEndian.PutUint64(input[sha256.Size:], index)
+	binary.LittleEndian.PutUint64(input[vrfHashSize:], index)
 
-	return sha256.Sum256(input[:])
+	return vrfHash(input[:])
 }
 
-func (k *VRFKey) fold(s *VRFState, levels int) [sha256.Size]byte {
+func (k *VRFKey) fold(s *VRFState, levels int) [vrfHashSize]byte {
 	node := k.leaf(uint64(s.slot))
 	for level := range levels {
 		if (s.slot>>level)&1 == 0 {
@@ -187,7 +187,7 @@ func (k *VRFKey) fold(s *VRFState, levels int) [sha256.Size]byte {
 	return node
 }
 
-func (k *VRFKey) subtree(level int, index uint64) [sha256.Size]byte {
+func (k *VRFKey) subtree(level int, index uint64) [vrfHashSize]byte {
 	if index<<level >= k.leaves {
 		return k.zeros[level]
 	}
@@ -196,7 +196,7 @@ func (k *VRFKey) subtree(level int, index uint64) [sha256.Size]byte {
 		return k.leaf(index)
 	}
 
-	var left [sha256.Size]byte
+	var left [vrfHashSize]byte
 
 	done := make(chan struct{})
 	spawned := false
@@ -225,11 +225,33 @@ func (k *VRFKey) subtree(level int, index uint64) [sha256.Size]byte {
 	return vrfNode(&left, &right)
 }
 
-func vrfNode(left, right *[sha256.Size]byte) [sha256.Size]byte {
-	var input [2 * sha256.Size]byte
+func vrfNode(left, right *[vrfHashSize]byte) [vrfHashSize]byte {
+	var input [2 * vrfHashSize]byte
 
 	copy(input[:], left[:])
-	copy(input[sha256.Size:], right[:])
+	copy(input[vrfHashSize:], right[:])
 
-	return sha256.Sum256(input[:])
+	return vrfHash(input[:])
+}
+
+func vrfHash(input []byte) [vrfHashSize]byte {
+	var block [keccakRate]byte
+
+	copy(block[:], input)
+	block[len(input)] = 0x01
+	block[keccakRate-1] |= 0x80
+
+	var state [25]uint64
+	for i := range keccakRate / 8 {
+		state[i] = binary.LittleEndian.Uint64(block[8*i:])
+	}
+
+	keccakF1600(&state)
+
+	var out [vrfHashSize]byte
+	for i := range vrfHashSize / 8 {
+		binary.LittleEndian.PutUint64(out[8*i:], state[i])
+	}
+
+	return out
 }

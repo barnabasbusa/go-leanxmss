@@ -6,7 +6,32 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+
+	"golang.org/x/crypto/sha3"
 )
+
+func referenceKeccak256(input []byte) [vrfHashSize]byte {
+	var out [vrfHashSize]byte
+
+	h := sha3.NewLegacyKeccak256()
+	h.Write(input)
+	h.Sum(out[:0])
+
+	return out
+}
+
+func TestVRFHash(t *testing.T) {
+	for _, size := range []int{0, 1, 40, 64, keccakRate - 1} {
+		input := make([]byte, size)
+		for i := range input {
+			input[i] = byte(i*7 + size)
+		}
+
+		if vrfHash(input) != referenceKeccak256(input) {
+			t.Fatalf("hash of %d bytes differs from Keccak-256", size)
+		}
+	}
+}
 
 // vrfReference is a VRF tree built in full up to a power of two of leaves, to
 // check states against.
@@ -31,13 +56,13 @@ func newVRFReference(seed [sha256.Size]byte, leaves uint64, depth int) *vrfRefer
 			input[sha256.Size+b] = byte(i >> (8 * b))
 		}
 
-		r.layers[0][i] = sha256.Sum256(input[:])
+		r.layers[0][i] = referenceKeccak256(input[:])
 	}
 
 	for level := 1; level <= depth; level++ {
 		r.layers[level] = make([][sha256.Size]byte, len(r.layers[level-1])/2)
 		for i := range r.layers[level] {
-			r.layers[level][i] = vrfNode(&r.layers[level-1][2*i], &r.layers[level-1][2*i+1])
+			r.layers[level][i] = referenceKeccak256(append(r.layers[level-1][2*i][:], r.layers[level-1][2*i+1][:]...))
 		}
 	}
 
@@ -122,7 +147,7 @@ func mustVRFAdvance(t *testing.T, k *VRFKey, s *VRFState, slot uint32) *VRFState
 // SHA-256("vrf-seed" | BLS secret key) and the first 2^20 leaves are filled.
 func TestVRFDevnetVector(t *testing.T) {
 	secret, _ := hex.DecodeString("2892f3ba475c3640a67fe730798ad9c4eed3a6d934db85f91c41cfc837ce8834")
-	want, _ := hex.DecodeString("0fc00857fdae6d29c18f54563c64e166b1fff1c6d943bb2c43e8b096bb60585e")
+	want, _ := hex.DecodeString("46f6772a35c14c7f8467e9d8791450ed3c6853191129876fc50e769ec9bac18d")
 	k := mustVRFKey(t, sha256.Sum256(append([]byte("vrf-seed"), secret...)), DefaultVRFLeaves)
 
 	s, err := k.State(0)
@@ -306,13 +331,13 @@ func TestVRFSharedVector(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	encoding := sha256.Sum256(s.Bytes())
-	if got := hex.EncodeToString(encoding[:]); got != "e3e4bc109e1b45f4a20015719ed55cb3e1d507c85c76c9605abcd83afbaace1f" {
-		t.Fatalf("SHA-256 of the encoded state is %s", got)
+	encoding := referenceKeccak256(s.Bytes())
+	if got := hex.EncodeToString(encoding[:]); got != "63b553b8e581093f7c4631b22aba29bd0ce06d015872f910844ee09c6ca76546" {
+		t.Fatalf("Keccak-256 of the encoded state is %s", got)
 	}
 
 	root := k.Root(s)
-	if got := hex.EncodeToString(root[:]); got != "85f4614748229923af260c44d82b3ac380c4b32e3e3bfd9f8a57684e2b90d93e" {
+	if got := hex.EncodeToString(root[:]); got != "c2ea7ef9c148cbef3fae2b336c6772d7e815f3dba924abc25e1451ce196b9a37" {
 		t.Fatalf("root is %s", got)
 	}
 }
